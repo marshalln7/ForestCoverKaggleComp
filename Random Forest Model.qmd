@@ -1,0 +1,86 @@
+---
+title: "Naive Bayes Model"
+format: html
+---
+
+```{r}
+library(vroom)
+library(tidyverse)
+library(tidymodels)
+library(dplyr)
+library(discrim)
+```
+
+```{r}
+train_data <- vroom("train.csv") |>
+  mutate(Cover_Type = as.factor(Cover_Type)) |>
+  mutate(across(-Cover_Type, as.numeric),
+         Cover_Type = as.factor(Cover_Type))
+test_data <- vroom("test.csv") |>
+  mutate(across(everything(), as.numeric))
+```
+
+```{r}
+recipe <- recipe(Cover_Type ~ ., data=train_data) |>
+  step_mutate(Distance_to_Hydrology = sqrt((Horizontal_Distance_To_Hydrology ** 2) + Vertical_Distance_To_Hydrology ** 2)) |>
+  step_rm(Id, Horizontal_Distance_To_Hydrology, Vertical_Distance_To_Hydrology)
+
+# prepped_recipe <- prep(recipe)
+# train_data_2 <- bake(prepped_recipe, new_data=train_data)
+# vroom_write(x=train_data_2, file="Baked Train Data.csv", delim=",")
+```
+
+```{r}
+my_model <- rand_forest(trees=tune(),
+                        min_n=tune()) %>%
+  set_engine("ranger") %>%
+  set_mode("classification")
+
+wf <- workflow() %>%
+  add_recipe(recipe) %>%
+  add_model(my_model)
+
+grid_of_tuning_params <- grid_space_filling(
+  trees(), 
+  min_n(),
+  size = 10
+)
+
+folds <- vfold_cv(train_data, v = 5, repeats=1)
+```
+
+```{r}
+CV_results <- wf %>%
+  tune_grid(resamples=folds,
+  grid=grid_of_tuning_params,
+  metrics=metric_set(accuracy))
+
+```
+
+```{r}
+bestTune <- CV_results %>%
+  select_best(metric="accuracy")
+```
+
+```{r}
+final_wf <- wf %>%
+  finalize_workflow(bestTune) %>%
+  fit(data=train_data)
+
+## Predict7
+tree_predictions <- final_wf %>%
+  predict(new_data = test_data)
+
+```
+
+
+```{r}
+kaggle_submission <- test_data |>
+  bind_cols(tree_predictions) |>
+  rename(Cover_Type = .pred_class) |>
+  select(Id, Cover_Type)
+```
+
+```{r}
+vroom_write(x=kaggle_submission, file="Random Forest Predictions.csv", delim=",")
+```
